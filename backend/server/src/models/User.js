@@ -1,7 +1,8 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import Counter from "./Counter.js";
 
-const roleEnum = ["manager", "staff","customer"];
+const roleEnum = ["manager", "staff", "customer"];
 const statusEnum = ["active", "inactive"];
 const userSchema = new mongoose.Schema({
     userId: {
@@ -25,7 +26,7 @@ const userSchema = new mongoose.Schema({
     role: {
         type: String,
         enum: roleEnum,
-        default: "customer",
+        default: "manager",
     },
     status: {
         type: String,
@@ -46,26 +47,43 @@ const userSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
-const User = mongoose.model("User", userSchema);
+userSchema.pre("validate", async function (next) {
+    try {
+        if (this.isNew && !this.userId) {
+            this.userId = await generateUserId(this.role);
+        }
+        next();
+    } catch (error) {
+        next(error);
+    }
+});
 
 userSchema.pre("save", async function (next) {
-    if (!this.isModified("password")) return next();
-    this.password = await bcrypt.hash(this.password, 10);
-    next();
+    try {
+        if (this.isModified("password")) {
+            this.password = await bcrypt.hash(this.password, 10);
+        }
+
+        next();
+    } catch (error) {
+        next(error);
+    }
 });
 
 userSchema.methods.comparePassword = async function (password) {
     return await bcrypt.compare(password, this.password);
 };
 
+const User = mongoose.model("User", userSchema);
+
 async function generateUserId(role) {
-    const lastUser = await User.findOne({ role }).sort({ createdAt: -1 });
-    if (!lastUser) {
-        return role + "-000001";
-    }
-    const lastUserId = lastUser.userId.split("-")[1];
-    const newUserId = parseInt(lastUserId) + 1;
-    return role + "-" + newUserId.toString();
+    const counter = await Counter.findOneAndUpdate(
+        { _id: role },
+        { $inc: { seq: 1 } },
+        { upsert: true, new: true }
+    );
+
+    return `${role}-${counter.seq.toString().padStart(6, "0")}`;
 }
 
 export default User;
